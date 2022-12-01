@@ -3,26 +3,27 @@ import numpy as np
 import math
 import torch
 import torch.nn as nn
-from torch.distributions import MultivariateNormal
-from torch.autograd import Variable
+# from torch.distributions import MultivariateNormal
+# from torch.autograd import Variable
 
-from torchvision import datasets
-from torchvision.transforms import transforms
+# from torchvision import datasets
+# from torchvision.transforms import transforms
 
-from mine.models.gan import GAN
+# from mine.models.gan import GAN
 
-from mine.datasets import FunctionDataset, MultivariateNormalDataset
+# from mine.datasets import FunctionDataset, MultivariateNormalDataset
 from mine.models.layers import ConcatLayer, CustomSequential
 
-import pytorch_lightning as pl
-from pytorch_lightning import Trainer
-import mine.utils
+import mine.utils.helpers as utils
+# from symbol import trailer
 
 torch.autograd.set_detect_anomaly(True)
 
 EPS = 1e-6
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+
 #device = 'cpu'
 print("Device:", device)
 
@@ -79,7 +80,6 @@ class Mine(nn.Module):
     def forward(self, x, z, z_marg=None):
         if z_marg is None:
             z_marg = z[torch.randperm(x.shape[0])]
-
         t = self.T(x, z).mean()
         t_marg = self.T(x, z_marg)
 
@@ -104,7 +104,7 @@ class Mine(nn.Module):
             mi = -self.forward(x, z, z_marg)
         return mi
 
-    def optimize(self, X, Y, iters, batch_size, opt=None):
+    def optimize(self, X, Y, iters, batch_size=100, opt=None):
 
         if opt is None:
             opt = torch.optim.Adam(self.parameters(), lr=1e-4)
@@ -123,7 +123,7 @@ class Mine(nn.Module):
                 #print(f"It {iter} - MI: {mu_mi / batch_size}")
 
         final_mi = self.mi(X, Y)
-        print(f"Final MI: {final_mi}")
+        # print(f"Final MI: {final_mi}")
         return final_mi
 
 
@@ -142,7 +142,7 @@ class T(nn.Module):
         return self.layers(x, z)
 
 
-class MutualInformationEstimator(pl.LightningModule):
+class MutualInformationEstimator(nn.Module):
     def __init__(self, x_dim, z_dim, loss='mine', **kwargs):
         super().__init__()
         self.x_dim = x_dim
@@ -151,10 +151,10 @@ class MutualInformationEstimator(pl.LightningModule):
 
         self.energy_loss = Mine(self.T, loss=loss, alpha=kwargs['alpha'])
 
-        self.kwargs = kwargs
+        # self.kwargs = kwargs
 
-        self.train_loader = kwargs.get('train_loader')
-        self.test_loader = kwargs.get('test_loader')
+        # self.train_loader = kwargs.get('train_loader')
+        # self.test_loader = kwargs.get('test_loader')
 
     def forward(self, x, z):
         if self.on_gpu:
@@ -199,184 +199,183 @@ class MutualInformationEstimator(pl.LightningModule):
         self.avg_test_mi = avg_mi
         return {'avg_test_mi': avg_mi, 'log': tensorboard_logs}
 
-    @pl.data_loader
-    def train_dataloader(self):
-        if self.train_loader:
-            return self.train_loader
+    # @pl.data_loader
+    # def train_dataloader(self):
+    #     if self.train_loader:
+    #         return self.train_loader
 
-        train_loader = torch.utils.data.DataLoader(
-            FunctionDataset(self.kwargs['N'], self.x_dim,
-                            self.kwargs['sigma'], self.kwargs['f']),
-            batch_size=self.kwargs['batch_size'], shuffle=True)
-        return train_loader
+    #     train_loader = torch.utils.data.DataLoader(
+    #         FunctionDataset(self.kwargs['N'], self.x_dim,
+    #                         self.kwargs['sigma'], self.kwargs['f']),
+    #         batch_size=self.kwargs['batch_size'], shuffle=True)
+    #     return train_loader
 
-    @pl.data_loader
-    def test_dataloader(self):
-        if self.test_loader:
-            return self.train_loader
+    # @pl.data_loader
+    # def test_dataloader(self):
+    #     if self.test_loader:
+    #         return self.train_loader
 
-        test_loader = torch.utils.data.DataLoader(
-            FunctionDataset(self.kwargs['N'], self.x_dim,
-                            self.kwargs['sigma'], self.kwargs['f']),
-            batch_size=self.kwargs['batch_size'], shuffle=True)
-        return test_loader
+    #     test_loader = torch.utils.data.DataLoader(
+    #         FunctionDataset(self.kwargs['N'], self.x_dim,
+    #                         self.kwargs['sigma'], self.kwargs['f']),
+    #         batch_size=self.kwargs['batch_size'], shuffle=True)
+    #     return test_loader
 
-
-def build_dist(rho):
-    mu = torch.tensor([0.0, 0.0])
-    cov = torch.tensor([[1, rho], [rho, 1]])
-    dist = MultivariateNormal(mu, cov)
-    return dist
-
-
-def function_experiment():
-    N = 3000
-    lr = 1e-4
-    batch_size = 256
-    epochs = 200
-
-    def f1(x): return x
-    def f2(x): return x**3
-    def f3(x): return torch.sin(x)
-    sigmas = torch.linspace(0, 0.9, 10)
-    fs = [f1, f2, f3]
-    dim = 2
-
-    res = []
-    for sigma in sigmas:
-        for ix, f in enumerate(fs):
-            print(f"Experiment: {ix + 1}, Sigma: {sigma}...")
-
-            kwargs = {
-                'N': N,
-                'sigma': sigma,
-                'f': f,
-                'lr': lr,
-                'batch_size': batch_size
-            }
-
-            model = MutualInformationEstimator(
-                dim, dim, loss='mine', **kwargs).to(device)
-            trainer = Trainer(max_epochs=epochs,
-                              early_stop_callback=False, gpus=1)
-            trainer.fit(model)
-            trainer.test()
-
-            # Append result
-            res.append([ix, sigma, model.avg_test_mi])
-
-    res = np.array(res)
-    Z = res[:, -1].reshape((len(sigmas), len(fs))).T
-    plt.figure()
-    plt.imshow(Z, cmap='Blues')
-    plt.show()
+# def build_dist(rho):
+#     mu = torch.tensor([0.0, 0.0])
+#     cov = torch.tensor([[1, rho], [rho, 1]])
+#     dist = MultivariateNormal(mu, cov)
+#     return dist
 
 
-def rho_experiment():
-    dim = 20
-    N = 3000
-    lr = 1e-3
-    epochs = 100
-    batch_size = 128
+# def function_experiment():
+#     N = 3000
+#     lr = 1e-4
+#     batch_size = 256
+#     epochs = 200
 
-    x_dim = dim
-    z_dim = dim
+#     def f1(x): return x
+#     def f2(x): return x**3
+#     def f3(x): return torch.sin(x)
+#     sigmas = torch.linspace(0, 0.9, 10)
+#     fs = [f1, f2, f3]
+#     dim = 2
 
-    steps = 20
-    rhos = np.linspace(-0.99, 0.99, steps)
-    res = []
+#     res = []
+#     for sigma in sigmas:
+#         for ix, f in enumerate(fs):
+#             print(f"Experiment: {ix + 1}, Sigma: {sigma}...")
 
-    # Rho Experiment
-    for rho in rhos:
-        train_loader = torch.utils.data.DataLoader(
-            MultivariateNormalDataset(N, dim, rho), batch_size=batch_size, shuffle=True)
-        test_loader = torch.utils.data.DataLoader(
-            MultivariateNormalDataset(N, dim, rho), batch_size=batch_size, shuffle=True)
+#             kwargs = {
+#                 'N': N,
+#                 'sigma': sigma,
+#                 'f': f,
+#                 'lr': lr,
+#                 'batch_size': batch_size
+#             }
 
-        true_mi = train_loader.dataset.true_mi
+#             model = MutualInformationEstimator(
+#                 dim, dim, loss='mine', **kwargs).to(device)
+#             trainer = trailer(max_epochs=epochs,
+#                               early_stop_callback=False, gpus=1)
+#             trainer.fit(model)
+#             trainer.test()
 
-        kwargs = {
-            'lr': lr,
-            'batch_size': batch_size,
-            'train_loader': train_loader,
-            'test_loader': test_loader,
-            'alpha': 1.0
-        }
+#             # Append result
+#             res.append([ix, sigma, model.avg_test_mi])
 
-        model = MutualInformationEstimator(
-            dim, dim, loss='mine_biased', **kwargs).to(device)
-        trainer = Trainer(max_epochs=epochs, early_stop_callback=False, gpus=1)
-        trainer.fit(model)
-        trainer.test()
-
-        print("True_mi {}".format(true_mi))
-        print("MINE {}".format(model.avg_test_mi))
-        res.append((rho, model.avg_test_mi, true_mi))
-
-    res = np.array(res)
-    plt.figure()
-    plt.plot(res[:, 0], res[:, 1], label='MINE')
-    plt.plot(res[:, 0], res[:, 2], linestyle='--', label='True MI')
-    plt.legend()
-    plt.show()
+#     res = np.array(res)
+#     Z = res[:, -1].reshape((len(sigmas), len(fs))).T
+#     plt.figure()
+#     plt.imshow(Z, cmap='Blues')
+#     plt.show()
 
 
-def gan_experiment():
+# def rho_experiment():
+#     dim = 20
+#     N = 3000
+#     lr = 1e-3
+#     epochs = 100
+#     batch_size = 128
 
-    batch_size = 256
-    kwargs = {}
+#     x_dim = dim
+#     z_dim = dim
 
-    train_loader = torch.utils.data.DataLoader(
-        datasets.MNIST('../data', train=True, download=True,
-                       transform=transforms.Compose([
-                           transforms.ToTensor(),
-                           transforms.Normalize((0.1307,), (0.3081,))
-                       ])),
-        batch_size=batch_size, shuffle=True, **kwargs)
+#     steps = 20
+#     rhos = np.linspace(-0.99, 0.99, steps)
+#     res = []
 
-    test_loader = torch.utils.data.DataLoader(
-        datasets.MNIST('../data', train=False, transform=transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
-        ])),
-        batch_size=batch_size, shuffle=True, **kwargs)
+#     # Rho Experiment
+#     for rho in rhos:
+#         train_loader = torch.utils.data.DataLoader(
+#             MultivariateNormalDataset(N, dim, rho), batch_size=batch_size, shuffle=True)
+#         test_loader = torch.utils.data.DataLoader(
+#             MultivariateNormalDataset(N, dim, rho), batch_size=batch_size, shuffle=True)
 
-    img, label = next(iter(train_loader))
+#         true_mi = train_loader.dataset.true_mi
 
-    output_dim = 28*28
-    input_dim = 100
-    lr = 2e-3
-    print_every = 100
+#         kwargs = {
+#             'lr': lr,
+#             'batch_size': batch_size,
+#             'train_loader': train_loader,
+#             'test_loader': test_loader,
+#             'alpha': 1.0
+#         }
 
-    mi_model = T(output_dim, 1)
+#         model = MutualInformationEstimator(
+#             dim, dim, loss='mine_biased', **kwargs).to(device)
+#         trainer = Trainer(max_epochs=epochs, early_stop_callback=False, gpus=1)
+#         trainer.fit(model)
+#         trainer.test()
 
-    mi_estimator = Mine(mi_model, loss='mine').to(device)
-    opt_mi = torch.optim.Adam(mi_estimator.parameters(), lr=lr)
+#         print("True_mi {}".format(true_mi))
+#         print("MINE {}".format(model.avg_test_mi))
+#         res.append((rho, model.avg_test_mi, true_mi))
 
-    model = GAN(input_dim, output_dim, conditional_dim=1,
-                mi_estimator=mi_estimator, device=device, __lambda__=0.0).to(device)
-
-    epochs = 100
-    opt_g = torch.optim.Adam(model.parameters(), lr=lr)
-    opt_d = torch.optim.Adam(model.parameters(), lr=lr)
-
-    for epoch in range(epochs):
-        for ix, (img, label) in enumerate(train_loader):
-
-            if device == 'cuda':
-                label = label.float().cuda()
-                img = img.cuda()
-
-            d_loss, generator_loss = model.loss_fn(
-                img, opt_g, opt_d, opt_mi, conditional=label)
-
-            if ix % print_every == 0:
-                prct = (ix + 2) * batch_size/(batch_size * len(train_loader))
-                print(
-                    f"Epoch {epoch} [{(ix + 2) * batch_size}/{batch_size * len(train_loader)}] [{100*prct:.3}%] Loss (d/g): [{d_loss.item():.3}/{generator_loss.item():.3}]")
+#     res = np.array(res)
+#     plt.figure()
+#     plt.plot(res[:, 0], res[:, 1], label='MINE')
+#     plt.plot(res[:, 0], res[:, 2], linestyle='--', label='True MI')
+#     plt.legend()
+#     plt.show()
 
 
-if __name__ == '__main__':
-    rho_experiment()
-    # function_experiment()
-    # gan_experiment()
+# def gan_experiment():
+
+#     batch_size = 256
+#     kwargs = {}
+
+#     train_loader = torch.utils.data.DataLoader(
+#         datasets.MNIST('../data', train=True, download=True,
+#                        transform=transforms.Compose([
+#                            transforms.ToTensor(),
+#                            transforms.Normalize((0.1307,), (0.3081,))
+#                        ])),
+#         batch_size=batch_size, shuffle=True, **kwargs)
+
+#     test_loader = torch.utils.data.DataLoader(
+#         datasets.MNIST('../data', train=False, transform=transforms.Compose([
+#             transforms.ToTensor(),
+#             transforms.Normalize((0.1307,), (0.3081,))
+#         ])),
+#         batch_size=batch_size, shuffle=True, **kwargs)
+
+#     img, label = next(iter(train_loader))
+
+#     output_dim = 28*28
+#     input_dim = 100
+#     lr = 2e-3
+#     print_every = 100
+
+#     mi_model = T(output_dim, 1)
+
+#     mi_estimator = Mine(mi_model, loss='mine').to(device)
+#     opt_mi = torch.optim.Adam(mi_estimator.parameters(), lr=lr)
+
+#     model = GAN(input_dim, output_dim, conditional_dim=1,
+#                 mi_estimator=mi_estimator, device=device, __lambda__=0.0).to(device)
+
+#     epochs = 100
+#     opt_g = torch.optim.Adam(model.parameters(), lr=lr)
+#     opt_d = torch.optim.Adam(model.parameters(), lr=lr)
+
+#     for epoch in range(epochs):
+#         for ix, (img, label) in enumerate(train_loader):
+
+#             if device == 'cuda':
+#                 label = label.float().cuda()
+#                 img = img.cuda()
+
+#             d_loss, generator_loss = model.loss_fn(
+#                 img, opt_g, opt_d, opt_mi, conditional=label)
+
+#             if ix % print_every == 0:
+#                 prct = (ix + 2) * batch_size/(batch_size * len(train_loader))
+#                 print(
+#                     f"Epoch {epoch} [{(ix + 2) * batch_size}/{batch_size * len(train_loader)}] [{100*prct:.3}%] Loss (d/g): [{d_loss.item():.3}/{generator_loss.item():.3}]")
+
+
+# if __name__ == '__main__':
+#     rho_experiment()
+#     # function_experiment()
+#     # gan_experiment()
