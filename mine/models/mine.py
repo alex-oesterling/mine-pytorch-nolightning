@@ -21,8 +21,8 @@ torch.autograd.set_detect_anomaly(True)
 
 EPS = 1e-6
 
-# device = 'cuda' if torch.cuda.is_available() else 'cpu'
-device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# device = 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 #device = 'cpu'
 print("Device:", device)
